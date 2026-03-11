@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 const FREE_LIMIT = 3;
 const FILLER_WORDS = ['um','uh','like','you know','literally','basically','right','so','actually','kind of','sort of','i mean','you see','well','okay so','and then','but then'];
+const OPENAI_KEY = import.meta.env.VITE_OPENAI_KEY || '';
 
 function detectFillers(text: string) {
   const lower = text.toLowerCase();
@@ -68,8 +69,10 @@ const G = {
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Outfit:wght@300;400;500;600;700&display=swap');
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:${G.bg}; color:${G.text}; font-family:'Outfit',sans-serif; }
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  html, body { width:100%; min-height:100vh; background:${G.bg}; overflow-x:hidden; }
+  body { color:${G.text}; font-family:'Outfit',sans-serif; }
+  #root { width:100%; min-height:100vh; background:${G.bg}; }
   ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:#1e2235; border-radius:2px; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
   @keyframes spin { to{transform:rotate(360deg)} }
@@ -85,15 +88,26 @@ const css = `
   textarea:focus, input:focus { border-color:#6366f1 !important; }
 `;
 
+
+const Footer = ({ onPrivacy }: { onPrivacy: () => void }) => (
+  <footer style={{ textAlign:'center', padding:'24px 20px', borderTop:`1px solid #1e2235`, marginTop:40 }}>
+    <p style={{ fontSize:12, color:'#6b7280' }}>
+      © {new Date().getFullYear()} LionMountain Pictures LLC · SpeakCoach AI
+      {' · '}
+      <button onClick={onPrivacy} style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontSize:12, textDecoration:'underline', padding:0 }}>
+        Privacy Policy
+      </button>
+    </p>
+  </footer>
+);
+
+
 export default function App() {
   const [screen, setScreen] = useState('home');
   const [user, setUser] = useState<any>(null);
   const [analysesUsed, setAnalysesUsed] = useState(0);
   const [showAuth, setShowAuth] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [openaiKeyInput, setOpenaiKeyInput] = useState('');
-  const [savedKey, setSavedKey] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [mode, setMode] = useState('record');
 
@@ -119,10 +133,8 @@ export default function App() {
   useEffect(() => {
     const u = localStorage.getItem('sc_user');
     const n = localStorage.getItem('sc_uses');
-    const k = localStorage.getItem('sc_openai');
     if (u) setUser(JSON.parse(u));
     if (n) setAnalysesUsed(parseInt(n) || 0);
-    if (k) setSavedKey(k);
   }, []);
 
   const canAnalyze = user?.isPaid || analysesUsed < FREE_LIMIT;
@@ -142,22 +154,8 @@ export default function App() {
     setShowUpgrade(false);
   };
 
-  const handleSaveKey = () => {
-    if (!openaiKeyInput.startsWith('sk-')) {
-      setApiError('Invalid key. Your OpenAI key must start with "sk-".');
-      return;
-    }
-    setSavedKey(openaiKeyInput);
-    localStorage.setItem('sc_openai', openaiKeyInput);
-    setShowKeyModal(false);
-    setOpenaiKeyInput('');
-    setApiError(null);
-  };
-
-  // ── RECORDING ──────────────────────────────────────────────────
   const startRecording = async () => {
     if (!canAnalyze) { setShowUpgrade(true); return; }
-    if (!savedKey) { setShowKeyModal(true); return; }
     setCamError(null); setTranscript(''); setPauses([]);
     audioChunksRef.current = []; pausesRef.current = [];
 
@@ -179,7 +177,6 @@ export default function App() {
         setRecTime(t => { if (t >= 59) { stopRecording(); return 60; } return t + 1; });
       }, 1000);
 
-      // Pause detection via audio volume analysis
       const audioCtx = new AudioContext();
       const source = audioCtx.createMediaStreamSource(audioStream);
       const analyser = audioCtx.createAnalyser();
@@ -251,18 +248,17 @@ export default function App() {
 
     const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${savedKey}` },
+      headers: { 'Authorization': `Bearer ${OPENAI_KEY}` },
       body: formData,
     });
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.error?.message || 'Whisper API error');
+      throw new Error(err.error?.message || 'Transcription error');
     }
     const data = await res.json();
     return data.text || '';
   };
 
-  // ── ANALYSIS ───────────────────────────────────────────────────
   const runAnalysis = async (text: string, duration: number, pauseData: any[]) => {
     setApiError(null); setAnalysisStep(0); setScreen('analyzing');
     const timers = [1800, 3600, 5400].map((ms, i) => setTimeout(() => setAnalysisStep(i + 1), ms));
@@ -289,13 +285,13 @@ METRICS:
 
 Respond ONLY with valid JSON. No text before or after, no markdown backticks:
 
-{"overallScore":<integer 1-10>,"summary":"<3 sentences: direct, honest assessment of THIS specific speaker based on their actual words>","categories":[{"name":"Speech Flow","score":<1-10>,"icon":"🗣️","comment":"<1 specific sentence about this speaker>"},{"name":"Tone & Expression","score":<1-10>,"icon":"🎵","comment":"<1 specific sentence>"},{"name":"Clarity & Structure","score":<1-10>,"icon":"🧩","comment":"<1 specific sentence>"},{"name":"Speaking Pace","score":<1-10>,"icon":"⏱️","comment":"<1 sentence referencing the ${wpm} WPM>"},{"name":"Confidence & Presence","score":<1-10>,"icon":"💪","comment":"<1 specific sentence>"}],"issues":[{"type":"Filler Words","severity":"<low|medium|high>","detail":"<specific fillers found and their impact>"},{"type":"Pauses & Hesitations","severity":"<low|medium|high>","detail":"<specific assessment with numbers>"},{"type":"Sentence Structure","severity":"<low|medium|high>","detail":"<specific observation from the transcript>"},{"type":"Persuasiveness","severity":"<low|medium|high>","detail":"<honest assessment with evidence from transcript>"}],"tips":["<Highly specific, immediately actionable tip #1 tailored to exactly this speaker>","<Tip #2 with a concrete exercise or technique>","<Tip #3>","<Tip #4>","<Tip #5: motivating but realistic>"]}`;
+{"overallScore":<integer 1-10>,"summary":"<3 sentences: direct, honest assessment>","categories":[{"name":"Speech Flow","score":<1-10>,"icon":"🗣️","comment":"<1 specific sentence>"},{"name":"Tone & Expression","score":<1-10>,"icon":"🎵","comment":"<1 specific sentence>"},{"name":"Clarity & Structure","score":<1-10>,"icon":"🧩","comment":"<1 specific sentence>"},{"name":"Speaking Pace","score":<1-10>,"icon":"⏱️","comment":"<1 sentence referencing the ${wpm} WPM>"},{"name":"Confidence & Presence","score":<1-10>,"icon":"💪","comment":"<1 specific sentence>"}],"issues":[{"type":"Filler Words","severity":"<low|medium|high>","detail":"<specific assessment>"},{"type":"Pauses & Hesitations","severity":"<low|medium|high>","detail":"<specific assessment>"},{"type":"Sentence Structure","severity":"<low|medium|high>","detail":"<specific observation>"},{"type":"Persuasiveness","severity":"<low|medium|high>","detail":"<honest assessment>"}],"tips":["<Tip 1>","<Tip 2>","<Tip 3>","<Tip 4>","<Tip 5>"]}`;
 
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${savedKey}`,
+          'Authorization': `Bearer ${OPENAI_KEY}`,
         },
         body: JSON.stringify({
           model: 'gpt-4o',
@@ -327,7 +323,6 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
   };
 
   const handleAnalyze = () => {
-    if (!savedKey) { setShowKeyModal(true); return; }
     if (!transcript || transcript.trim().split(/\s+/).length < 15) {
       setApiError('Not enough speech detected. Please speak for at least 20–30 seconds.');
       return;
@@ -341,7 +336,6 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     setRecTime(0); setResults(null); setApiError(null); setMode('record');
   };
 
-  // ── MODAL WRAPPER ──────────────────────────────────────────────
   const Modal = ({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) => (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.82)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20, backdropFilter:'blur(10px)' }}
       onClick={e => e.target === e.currentTarget && onClose()}>
@@ -355,18 +349,14 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     </div>
   );
 
-  // ── HOME ───────────────────────────────────────────────────────
   const HomeScreen = () => (
-    <div style={{ minHeight:'100vh', background:G.bg }}>
+    <div style={{ width:'100%', background:G.bg }}>
       <nav style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'18px 40px', borderBottom:`1px solid ${G.border}`, background:`${G.surface}dd`, backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:100 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <div style={{ width:32, height:32, background:`linear-gradient(135deg,${G.accent},#8b5cf6)`, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15 }}>🎙️</div>
           <span style={{ fontSize:18, fontWeight:700, fontFamily:'"Playfair Display",serif' }}>SpeakCoach<span style={{ color:G.accent }}>AI</span></span>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <button className="btn" onClick={() => setShowKeyModal(true)} style={{ color:savedKey?'#22c55e':G.muted, background:G.card, fontSize:13, fontWeight:600, padding:'6px 14px', border:`1px solid ${savedKey?'#22c55e33':G.border}`, borderRadius:9 }}>
-            {savedKey ? '✓ API Key' : '⚙️ API Key'}
-          </button>
           {user ? (
             <>
               {user.isPaid && <span style={{ background:`linear-gradient(135deg,${G.gold},#d97706)`, color:'#000', fontSize:11, fontWeight:800, padding:'3px 10px', borderRadius:20 }}>PRO</span>}
@@ -418,19 +408,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
         ))}
       </div>
 
-      <div style={{ maxWidth:960, margin:'0 auto', padding:'0 40px 40px', display:'flex', justifyContent:'center', gap:16, flexWrap:'wrap' }}>
-        {([['🎤','Powered by Whisper','Industry-leading transcription accuracy'],['🧠','Deep language & rhetoric understanding','Deep language & rhetoric understanding']] as [string,string,string][]).map(([icon,title,sub])=>(
-          <div key={title} style={{ background:G.card, border:`1px solid ${G.border}`, borderRadius:14, padding:'16px 22px', display:'flex', alignItems:'center', gap:14, minWidth:260 }}>
-            <span style={{ fontSize:28 }}>{icon}</span>
-            <div>
-              <div style={{ fontSize:14, fontWeight:700 }}>{title}</div>
-              <div style={{ fontSize:12, color:G.muted }}>{sub}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ maxWidth:760, margin:'0 auto', padding:'40px 40px 90px', textAlign:'center' }}>
+      <div style={{ maxWidth:760, margin:'0 auto', padding:'0 40px 90px', textAlign:'center' }}>
         <h2 style={{ fontSize:34, fontFamily:'"Playfair Display",serif', fontWeight:900, marginBottom:10 }}>Simple Pricing</h2>
         <p style={{ color:G.muted, marginBottom:40, fontSize:15 }}>Start free — upgrade when you need more.</p>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(250px,1fr))', gap:18 }}>
@@ -439,7 +417,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
             <div style={{ fontSize:38, fontWeight:900, fontFamily:'"Playfair Display",serif', marginBottom:3 }}>$0</div>
             <div style={{ color:G.muted, fontSize:13, marginBottom:22 }}>forever</div>
             <ul style={{ listStyle:'none', display:'flex', flexDirection:'column', gap:9, marginBottom:24 }}>
-              {['3 full analyses','Whisper transcription','Complete AI report','Personal action plan'].map(f => (
+              {['3 full analyses','AI transcription','Complete AI report','Personal action plan'].map(f => (
                 <li key={f} style={{ display:'flex', alignItems:'center', gap:8, fontSize:13 }}><span style={{ color:'#22c55e' }}>✓</span>{f}</li>
               ))}
             </ul>
@@ -454,7 +432,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
             </div>
             <div style={{ color:G.muted, fontSize:13, marginBottom:22 }}>or $29 one-time</div>
             <ul style={{ listStyle:'none', display:'flex', flexDirection:'column', gap:9, marginBottom:24 }}>
-              {['Unlimited analyses','Priority GPT-4o analysis','Video & audio upload','Progress tracking','All Free features'].map(f => (
+              {['Unlimited analyses','Advanced AI analysis','Video & audio upload','Progress tracking','All Free features'].map(f => (
                 <li key={f} style={{ display:'flex', alignItems:'center', gap:8, fontSize:13 }}><span style={{ color:G.accent }}>✓</span>{f}</li>
               ))}
             </ul>
@@ -465,7 +443,6 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     </div>
   );
 
-  // ── RECORD SCREEN ──────────────────────────────────────────────
   const RecordScreen = () => {
     const [uploadFile, setUploadFile] = useState<File|null>(null);
     const [uploadDur, setUploadDur] = useState(60);
@@ -492,7 +469,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
         formData.append('language', 'en');
         const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${savedKey}` },
+          headers: { 'Authorization': `Bearer ${OPENAI_KEY}` },
           body: formData,
         });
         if (!res.ok) throw new Error('Transcription failed');
@@ -509,7 +486,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     const tLeft = 60 - recTime;
 
     return (
-      <div style={{ minHeight:'100vh', background:G.bg, display:'flex', flexDirection:'column' }}>
+      <div style={{ minHeight:'100vh', width:'100%', background:G.bg, display:'flex', flexDirection:'column' }}>
         <div style={{ padding:'16px 28px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:`1px solid ${G.border}` }}>
           <button className="btn" onClick={() => { stopRecording(); setScreen('home'); }} style={{ color:G.muted, background:'none', fontSize:14 }}>← Home</button>
           <span style={{ fontFamily:'"Playfair Display",serif', fontWeight:700, fontSize:16 }}>SpeakCoach<span style={{ color:G.accent }}>AI</span></span>
@@ -539,7 +516,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
                       <div style={{ position:'absolute', inset:0, borderRadius:'50%', border:`3px solid ${G.border}` }}/>
                       <div style={{ position:'absolute', inset:0, borderRadius:'50%', border:'3px solid transparent', borderTopColor:G.accent, animation:'spin 1s linear infinite' }}/>
                     </div>
-                    <div style={{ color:G.text, fontSize:14, fontWeight:600 }}>Transcribing with Whisper…</div>
+                    <div style={{ color:G.text, fontSize:14, fontWeight:600 }}>Transcribing…</div>
                     <div style={{ color:G.muted, fontSize:13 }}>This takes a few seconds</div>
                   </div>
                 )}
@@ -602,7 +579,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
                       {transcript && <span style={{ fontSize:11, color:G.muted }}>{wordCount} words</span>}
                     </div>
                     {transcribing ? (
-                      <div style={{ fontSize:13, color:G.muted, animation:'pulse 1.5s infinite' }}>Whisper AI is processing your audio…</div>
+                      <div style={{ fontSize:13, color:G.muted, animation:'pulse 1.5s infinite' }}>Processing your audio…</div>
                     ) : (
                       <div style={{ fontSize:13, color:G.text, lineHeight:1.7, maxHeight:160, overflowY:'auto' as any }}>{transcript}</div>
                     )}
@@ -638,7 +615,6 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
                       <div style={{ fontSize:36, marginBottom:10 }}>🎬</div>
                       <div style={{ fontWeight:700, marginBottom:4 }}>{uploadFile.name}</div>
                       <div style={{ color:G.muted, fontSize:13 }}>{uploadDur}s · {(uploadFile.size/1024/1024).toFixed(1)} MB</div>
-                      {uploadDur < 60 && <div style={{ color:'#f59e0b', fontSize:13, marginTop:8 }}>⚠️ File shorter than 60 seconds</div>}
                     </>
                   ) : (
                     <>
@@ -659,7 +635,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
                       </button>
                     </div>
                     <textarea value={uTranscript} onChange={e => setUTranscript(e.target.value)}
-                      placeholder="Click 'Auto-transcribe' to use Whisper, or type the transcript manually…"
+                      placeholder="Click 'Auto-transcribe' or type manually…"
                       style={{ width:'100%', minHeight:110, background:G.surface, border:`1px solid ${G.border}`, borderRadius:9, padding:'10px 13px', color:G.text, fontSize:13, resize:'vertical' as any, lineHeight:1.6 }}/>
                   </div>
                 )}
@@ -668,7 +644,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
               <div style={{ background:G.card, border:`1px solid ${G.border}`, borderRadius:18, padding:22 }}>
                 <div style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>Ready to Analyze</div>
                 {!uploadFile ? (
-                  <div style={{ fontSize:13, color:G.muted, lineHeight:1.7 }}>Upload a video or audio file (min. 60 seconds) to get started.</div>
+                  <div style={{ fontSize:13, color:G.muted, lineHeight:1.7 }}>Upload a video or audio file to get started.</div>
                 ) : (
                   <>
                     {([['File', uploadFile.name.length>22?uploadFile.name.slice(0,22)+'…':uploadFile.name], ['Duration', `${uploadDur}s`], ['Transcript', uTranscript?`${uTranscript.split(/\s+/).length} words`:'Not yet']] as [string,string][]).map(([k,v]) => (
@@ -680,8 +656,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
                     {apiError && <div style={{ fontSize:13, color:'#ef4444', marginBottom:12, padding:'9px 12px', background:'rgba(239,68,68,0.08)', borderRadius:9 }}>{apiError}</div>}
                     <button className="btn" onClick={() => {
                       if (!canAnalyze) { setShowUpgrade(true); return; }
-                      if (!savedKey) { setShowKeyModal(true); return; }
-                      if (!uTranscript || uTranscript.trim().split(/\s+/).length < 15) { setApiError('Please add a transcript first — use Auto-transcribe or type manually.'); return; }
+                      if (!uTranscript || uTranscript.trim().split(/\s+/).length < 15) { setApiError('Please add a transcript first.'); return; }
                       runAnalysis(uTranscript, uploadDur, []);
                     }} style={{ background:`linear-gradient(135deg,${G.accent},#8b5cf6)`, color:'#fff', fontWeight:700, fontSize:14, padding:'12px', borderRadius:10, width:'100%', boxShadow:`0 5px 18px ${G.accentGlow}`, marginTop:6 }}>
                       🔍 Analyze →
@@ -696,9 +671,8 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     );
   };
 
-  // ── ANALYZING ─────────────────────────────────────────────────
   const AnalyzingScreen = () => (
-    <div style={{ minHeight:'100vh', background:G.bg, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:28 }}>
+    <div style={{ minHeight:'100vh', width:'100%', background:G.bg, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:28 }}>
       <div style={{ textAlign:'center' }}>
         <div style={{ width:76, height:76, margin:'0 auto 22px', position:'relative' }}>
           <div style={{ position:'absolute', inset:0, borderRadius:'50%', border:`3px solid ${G.border}` }}/>
@@ -721,12 +695,11 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     </div>
   );
 
-  // ── RESULTS ───────────────────────────────────────────────────
   const ResultsScreen = () => {
     if (!results) return null;
     const cols = ['#6366f1','#8b5cf6','#ec4899','#f59e0b','#22c55e'];
     return (
-      <div style={{ minHeight:'100vh', background:G.bg }}>
+      <div style={{ minHeight:'100vh', width:'100%', background:G.bg }}>
         <div style={{ padding:'16px 28px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:`1px solid ${G.border}`, background:`${G.surface}cc`, backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:50 }}>
           <button className="btn" onClick={reset} style={{ color:G.muted, background:'none', fontSize:14 }}>← Try Again</button>
           <span style={{ fontFamily:'"Playfair Display",serif', fontWeight:700 }}>Your Results</span>
@@ -802,7 +775,6 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
     );
   };
 
-  // ── RENDER ────────────────────────────────────────────────────
   return (
     <>
       <style>{css}</style>
@@ -810,37 +782,8 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
       {screen==='record' && <RecordScreen/>}
       {screen==='analyzing' && <AnalyzingScreen/>}
       {screen==='results' && <ResultsScreen/>}
+      <Footer onPrivacy={() => window.open('/privacy.html', '_blank')} />
 
-      {/* API KEY MODAL */}
-      {showKeyModal && (
-        <Modal title="🔑 OpenAI API Key" onClose={() => { setShowKeyModal(false); setApiError(null); }}>
-          <div style={{ fontSize:13, color:G.muted, marginBottom:16, lineHeight:1.65 }}>
-            One key powers everything — Whisper for transcription and GPT-4o for analysis.
-          </div>
-          <div style={{ fontSize:12, color:G.accent, marginBottom:16, background:G.accentSoft, padding:'10px 14px', borderRadius:10, lineHeight:1.6 }}>
-            📌 Get your key at <strong>platform.openai.com</strong> → API Keys → Create new secret key
-          </div>
-          <input
-            value={openaiKeyInput}
-            onChange={e => setOpenaiKeyInput(e.target.value)}
-            onKeyDown={e => e.key==='Enter' && handleSaveKey()}
-            type="password"
-            placeholder="sk-..."
-            style={{ width:'100%', background:G.surface, border:`1px solid ${savedKey?'#22c55e44':G.border}`, borderRadius:10, padding:'12px 15px', color:G.text, fontSize:14, marginBottom:8 }}
-          />
-          {savedKey && <div style={{ fontSize:12, color:'#22c55e', marginBottom:10 }}>✓ Key already saved — enter a new one to replace it</div>}
-          {apiError && <div style={{ fontSize:13, color:'#ef4444', marginBottom:10 }}>{apiError}</div>}
-          <button className="btn" onClick={handleSaveKey}
-            style={{ width:'100%', background:`linear-gradient(135deg,${G.accent},#8b5cf6)`, color:'#fff', fontWeight:700, fontSize:15, padding:'13px', borderRadius:11, marginBottom:12, boxShadow:`0 6px 20px ${G.accentGlow}` }}>
-            Save & Continue →
-          </button>
-          <p style={{ fontSize:12, color:G.muted, textAlign:'center' as any, lineHeight:1.6 }}>
-            🔒 Stored only in your browser. Never sent anywhere except OpenAI directly.
-          </p>
-        </Modal>
-      )}
-
-      {/* AUTH MODAL */}
       {showAuth && (
         <Modal title="Create Account" onClose={() => setShowAuth(false)}>
           <div style={{ fontSize:13, color:G.muted, marginBottom:20, lineHeight:1.65 }}>Save your progress and access your analyses anytime.</div>
@@ -854,16 +797,15 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
         </Modal>
       )}
 
-      {/* UPGRADE MODAL */}
       {showUpgrade && (
         <Modal title="Unlock Pro" onClose={() => setShowUpgrade(false)}>
           <div style={{ fontSize:13, color:G.muted, marginBottom:20, lineHeight:1.65 }}>
             {analysesUsed>=FREE_LIMIT ? '🔒 All 3 free analyses used. Upgrade for unlimited access.' : '⚡ Get unlimited analyses and all features.'}
           </div>
           {([
-            { plan:'weekly', label:'$9 / week', sub:'Auto-renews · cancel anytime', badge:'' },
+            { plan:'weekly', label:'$9 / week', sub:'Auto-renews · cancel anytime' },
             { plan:'onetime', label:'$29 one-time', sub:'Lifetime access · no subscription', badge:'POPULAR' }
-          ]).map(({ plan, label, sub, badge }) => (
+          ]).map(({ plan, label, sub, badge }: any) => (
             <button key={plan} className="btn" onClick={() => handleUpgrade(plan)}
               style={{ background:plan==='onetime'?G.accentSoft:G.surface, border:`1px solid ${plan==='onetime'?G.accent:G.border}`, borderRadius:13, padding:'14px 18px', textAlign:'left' as any, display:'flex', justifyContent:'space-between', alignItems:'center', width:'100%', marginBottom:10 }}>
               <div>
