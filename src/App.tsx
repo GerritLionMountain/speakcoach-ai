@@ -137,6 +137,27 @@ export default function App() {
     if (n) setAnalysesUsed(parseInt(n) || 0);
   }, []);
 
+  // Pre-warm camera preview when entering record screen
+  useEffect(() => {
+    if (screen !== 'record' || mode !== 'record') return;
+    let active = true;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.muted = true;
+          videoRef.current.play().catch(() => {});
+        }
+      } catch (e: any) {
+        setCamError(e.message || 'Camera not accessible');
+      }
+    })();
+    return () => { active = false; };
+  }, [screen, mode]);
+
   const canAnalyze = user?.isPaid || analysesUsed < FREE_LIMIT;
   const remaining = Math.max(0, FREE_LIMIT - analysesUsed);
 
@@ -160,9 +181,16 @@ export default function App() {
     audioChunksRef.current = []; pausesRef.current = [];
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.muted = true; }
+      let stream = streamRef.current;
+      if (!stream || !stream.active) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        streamRef.current = stream;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(() => {});
+      }
 
       const audioStream = new MediaStream(stream.getAudioTracks());
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
@@ -504,7 +532,7 @@ Respond ONLY with valid JSON. No text before or after, no markdown backticks:
             <div style={{ display:'grid', gridTemplateColumns:'1fr 340px', gap:18, alignItems:'start' }}>
               <div style={{ background:G.card, border:`1px solid ${G.border}`, borderRadius:18, overflow:'hidden', position:'relative', aspectRatio:'16/10' as any }}>
                 <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%', height:'100%', objectFit:'cover', display:'block', transform:'scaleX(-1)' }}/>
-                {!recording && !camError && !transcribing && (
+                {!recording && !camError && !transcribing && !streamRef.current && (
                   <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(7,8,15,0.88)', flexDirection:'column', gap:10 }}>
                     <div style={{ fontSize:42 }}>🎥</div>
                     <div style={{ color:G.muted, fontSize:14 }}>Camera starts when you record</div>
