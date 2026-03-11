@@ -158,6 +158,17 @@ export default function App() {
     return () => { active = false; };
   }, [screen, mode]);
 
+  // Re-attach stream to video after every re-render (fixes black screen on record)
+  useEffect(() => {
+    if (streamRef.current && videoRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  });
+
   const canAnalyze = user?.isPaid || analysesUsed < FREE_LIMIT;
   const remaining = Math.max(0, FREE_LIMIT - analysesUsed);
 
